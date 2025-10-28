@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>OpenCV.js Webcam Filters</title>
+  <style>
+    body {
+      text-align: center;
+      background-color: #121212;
+      color: white;
+      font-family: Arial, sans-serif;
+    }
+    video, canvas {
+      border: 2px solid #fff;
+      border-radius: 10px;
+      margin: 10px;
+    }
+    select, input[type="range"] {
+      margin: 10px;
+      padding: 5px;
+      border-radius: 5px;
+    }
+    label {
+      font-size: 16px;
+      margin-right: 10px;
+    }
+    #intensity-value {
+      display: inline-block;
+      width: 40px;
+      text-align: left;
+    }
+  </style>
+</head>
+<body>
+  <h1>🎥 OpenCV.js Webcam Filters</h1>
+
+  <div>
+    <label for="filter">Choose Filter:</label>
+    <select id="filter">
+      <option value="">-- Select Filter --</option>
+      <option value="gray">Black & White</option>
+      <option value="noisy">Noisy</option>
+      <option value="colorize">Colorized</option>
+      <option value="faceblur_dnn">Face Blur (DNN)</option>
+      <option value="cartoon">Cartoon</option>
+      <option value="posterize">Posterize</option>
+    </select>
+  </div>
+
+  <!-- Trackbar Slider for Filter Intensity -->
+  <div>
+    <label for="intensity">Filter Intensity:</label>
+    <input type="range" id="intensity" min="0" max="100" value="50" step="1">
+    <span id="intensity-value">50</span>
+  </div>
+
+  <br>
+  <video id="video" width="480" height="360" autoplay></video>
+  <canvas id="canvas" width="480" height="360"></canvas>
+
+  <!-- Load OpenCV.js first -->
+  <script src="https://docs.opencv.org/4.x/opencv.js"></script>
+
+  <!-- Then load your main script -->
+  <script src="app.js"></script>
+
+  <!--  Live update of intensity label -->
+  <script>
+    const intensitySlider = document.getElementById('intensity');
+    const intensityValue = document.getElementById('intensity-value');
+
+    intensitySlider.addEventListener('input', () => {
+      intensityValue.textContent = intensitySlider.value;
+    });
+  </script>
+</body>
+</html>
