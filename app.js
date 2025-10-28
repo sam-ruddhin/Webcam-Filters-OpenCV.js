@@ -34,11 +34,11 @@ async function loadDNN() {
     const modelResponse = await fetch('face_detector.caffemodel');
     const modelData = new Uint8Array(await modelResponse.arrayBuffer());
 
-    // Write both to OpenCV’s in-memory filesystem
+    // Writing both to OpenCV’s in-memory filesystem
     cv.FS_createDataFile('/', 'deploy.prototxt', proto, true, false, false);
     cv.FS_createDataFile('/', 'face_detector.caffemodel', modelData, true, false, false);
 
-    // Read the model from the virtual FS
+    // Reading the model from the virtual FS
     net = cv.readNetFromCaffe('deploy.prototxt', 'face_detector.caffemodel');
 
     console.log(" DNN model loaded successfully!");
@@ -78,8 +78,7 @@ function startProcessing() {
       switch (filter) {
         
         case 'gray':
-          cv.cvtColor(src, dst, cv.COLOR_RGBA2GRAY);
-          cv.cvtColor(dst, dst, cv.COLOR_GRAY2RGBA);
+          gray(src,dst);
           console.log("Applied: Black & White");
           break;
 
@@ -138,6 +137,19 @@ function startProcessing() {
 
 // Filter Functions 
 
+// GRAYSCALE FILTER
+function gray(src, dst) {
+  const intensity = parseInt(document.getElementById('intensity').value);
+  let gray = new cv.Mat();
+  cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
+  let factor = 1.0 - (intensity / 120.0);
+
+  gray.convertTo(gray, -1,factor, 0); 
+  cv.cvtColor(gray, dst, cv.COLOR_GRAY2RGBA);
+  gray.delete();
+}
+
+
 // NOISE FILTER
 function addNoise(src, dst) {
   let noise = new cv.Mat(src.rows, src.cols, src.type());
@@ -153,24 +165,37 @@ function addNoise(src, dst) {
 
   noise.data.set(randomArray);
   cv.addWeighted(src, 1.0, noise, 0.5, 0, dst);
-  //cv.add(src, noise, dst);
   noise.delete();
 }
 
 // COLORIZE FILTER
 function colorize(src, dst) {
+  
   try {
+
+    if(src.empty()) {
+      src.copyTo(dst);
+      return;
+    }
+
     // Convert to grayscale 8-bit 1 channel
     let gray = new cv.Mat();
     cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
+    gray.convertTo(gray, cv.CV_8U);
 
     // Create a 3-channel color output
     let color = new cv.Mat();
     cv.applyColorMap(gray, color, cv.COLORMAP_JET);
 
-    // Copy the result to dst so rest of pipeline works
-    color.copyTo(dst);
+    let bgr = new cv.Mat();
+    cv.cvtColor(src, bgr, cv.COLOR_RGBA2BGR);
 
+    const intensity = parseInt(document.getElementById('intensity').value)/100.0;
+    cv.addWeighted(bgr, 1 - intensity, color, intensity, 0, color);
+
+    cv.cvtColor(color, dst, cv.COLOR_BGR2RGBA);
+
+    bgr.delete();
     gray.delete();
     color.delete();
   } 
@@ -185,6 +210,8 @@ function applyDnnFaceBlur(src, dst) {
   try {
     if (!net) return src.copyTo(dst);
 
+    const intensity = parseInt(document.getElementById('intensity').value);
+    const ksize = Math.max(5,Math.floor(intensity / 2) * 2 + 1); 
     // Convert RGBA to BGR 
     let bgr = new cv.Mat();
     cv.cvtColor(src, bgr, cv.COLOR_RGBA2BGR);
@@ -198,7 +225,7 @@ function applyDnnFaceBlur(src, dst) {
     let out = net.forward();
 
     // Process detections
-    let faces = [];
+    
     for (let i = 0; i < out.total(); i += 7) {
       let confidence = out.data32F[i + 2];
       if (confidence > 0.5) {
@@ -209,7 +236,7 @@ function applyDnnFaceBlur(src, dst) {
 
         let rect = new cv.Rect(x1, y1, x2 - x1, y2 - y1);
         let roi = src.roi(rect);
-        cv.GaussianBlur(roi, roi, new cv.Size(55, 55), 30, 30);
+        cv.GaussianBlur(roi, roi, new cv.Size(ksize, ksize), 0, 0);
         roi.copyTo(src.roi(rect));
         roi.delete();
       }
@@ -231,28 +258,38 @@ function applyDnnFaceBlur(src, dst) {
 // CARTOON FILTER
 function cartoon(src, dst) {
   try {
+
+    if(src.empty()) {
+      src.copyTo(dst);
+      return;
+    }
+
+    const intensity = parseInt(document.getElementById('intensity').value);
+    const blursize = Math.max(3,Math.floor(intensity / 10) * 2 + 1);
     
     // Step 1: Convert to gray
     let gray = new cv.Mat();
     cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
 
     // Step 2: Median blur
-    cv.medianBlur(gray, gray, 7);
+    cv.medianBlur(gray, gray, blursize);
 
-    // Step 3: Edge detection (lighter)
+    // Step 3: Edge detection
     let edges = new cv.Mat();
     cv.adaptiveThreshold(gray, edges, 255,
-      cv.ADAPTIVE_THRESH_MEAN_C, cv.THRESH_BINARY, 9, 9);
+      cv.ADAPTIVE_THRESH_MEAN_C, cv.THRESH_BINARY, 9, intensity / 10);
 
     // Step 4: Convert edges to 3-channel
     cv.cvtColor(edges, edges, cv.COLOR_GRAY2RGBA);
 
-    // Step 5: Light color smoothing instead of bilateralFilter
+    // Step 5: Light color smoothing 
     let color = new cv.Mat();
-    cv.GaussianBlur(src, color, new cv.Size(5, 5), 0, 0);
+    cv.GaussianBlur(src, color, new cv.Size(blursize, blursize), 0, 0);
 
     cv.bitwise_and(color, edges, dst);
-    gray.delete(); edges.delete(); color.delete();
+    gray.delete();
+    edges.delete();
+    color.delete();
   } 
   catch (err) {
     console.error("Cartoon filter failed:", err);
@@ -264,14 +301,13 @@ function cartoon(src, dst) {
 function posterize(src, dst) {
   try {
     // Convert to float for math
-    let tmp = new cv.Mat();
-    src.convertTo(tmp, cv.CV_32F);
-
-    let levels = 4; 
+    const intensity = parseInt(document.getElementById('intensity').value);
+    let levels = Math.max(2, Math.floor(intensity / 25)+2);
     let step = 255.0 / (levels - 1);
 
-    //  lookup table (LUT)
-    let lut = new cv.Mat(1, 256, cv.CV_8U);
+    let lut = new cv.Mat(1,256,cv.CV_8U);
+
+
     for (let i = 0; i < 256; i++) {
       let quantized = Math.round(i / step) * step;
       lut.ucharPtr(0, i)[0] = Math.min(255, quantized);
@@ -279,8 +315,6 @@ function posterize(src, dst) {
 
     // Apply LUT to each channel
     cv.LUT(src, lut, dst);
-
-    tmp.delete();
     lut.delete();
   } 
   catch (err) {
