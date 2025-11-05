@@ -51,16 +51,46 @@ async function loadDNN() {
 
 // Main loop
 function startProcessing() {
-//   const FPS = 30;
 
     const FPS = 15;
+    let frameCount = 0;
+    let lastTime = performance.now();
+    let fpsDisplay = 0;
+    let memoryDisplay = "N/A";
+
+    const fpsText = document.getElementById('fps');
+    const frameText = document.getElementById('frames');
+    const memoryText = document.getElementById('memory');
+
 
     function processFrame() {
-        if (video.readyState !== video.HAVE_ENOUGH_DATA) {
+
+      const now = performance.now();
+      const elapsed = now - lastTime;
+      frameCount++;
+
+      // Update stats roughly every second
+      if (elapsed >= 1000) {
+        fpsDisplay = (frameCount * 1000 / elapsed).toFixed(1);
+        fpsText.textContent = `FPS: ${fpsDisplay}`;
+        frameText.textContent = `Frames: ${frameCount}`;
+        frameCount = 0;
+        lastTime = now;
+
+        if (performance.memory) {
+          const usedMB = (performance.memory.usedJSHeapSize / 1048576).toFixed(1);
+          const totalMB = (performance.memory.jsHeapSizeLimit / 1048576).toFixed(0);
+          memoryDisplay = `${usedMB} / ${totalMB} MB`;
+        }
+
+        memoryText.textContent = `RAM: ${memoryDisplay}`;
+      }
+
+      if (video.readyState !== video.HAVE_ENOUGH_DATA) {
         requestAnimationFrame(processFrame);
         const intensity = parseInt(document.getElementById('intensity').value);
         return;
-    }
+      }
 
     // Draw video frame to canvas
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
@@ -112,15 +142,8 @@ function startProcessing() {
       }
 
       // Overlay filter name on screen
-      cv.putText(
-        dst,
-        `Filter: ${filter}`,
-        new cv.Point(10, 30),
-        cv.FONT_HERSHEY_SIMPLEX,
-        1,
-        new cv.Scalar(255, 255, 255, 255),
-        2
-      );
+      cv.putText(dst,`Filter: ${filter}`, new cv.Point(10, 30),
+        cv.FONT_HERSHEY_SIMPLEX,1,new cv.Scalar(255, 255, 255, 255),2);
 
       cv.imshow('canvas', dst);
     } catch (e) {
@@ -206,54 +229,165 @@ function colorize(src, dst) {
 }
 
 // DNN FACE BLUR 
-function applyDnnFaceBlur(src, dst) {
-  try {
-    if (!net) return src.copyTo(dst);
+// function applyDnnFaceBlur(src, dst) {
+//   try {
+//     if (!net) return src.copyTo(dst);
 
-    const intensity = parseInt(document.getElementById('intensity').value);
-    const ksize = Math.max(5,Math.floor(intensity / 2) * 2 + 1); 
-    // Convert RGBA to BGR 
-    let bgr = new cv.Mat();
+//     const intensity = parseInt(document.getElementById('intensity').value);
+//     const ksize = Math.max(5,Math.floor(intensity / 2) * 2 + 1); 
+//     // Convert RGBA to BGR 
+//     let bgr = new cv.Mat();
+//     cv.cvtColor(src, bgr, cv.COLOR_RGBA2BGR);
+
+//     // Prepare blob
+//     let blob = cv.blobFromImage(bgr, 1.0, new cv.Size(300, 300),
+//       new cv.Scalar(104.0, 177.0, 123.0), false, false);
+
+//     net.setInput(blob);
+
+//     let out = net.forward();
+
+//     // Process detections
+    
+//     for (let i = 0; i < out.total(); i += 7) {
+//       let confidence = out.data32F[i + 2];
+//       if (confidence > 0.5) {
+//         let x1 = out.data32F[i + 3] * src.cols;
+//         let y1 = out.data32F[i + 4] * src.rows;
+//         let x2 = out.data32F[i + 5] * src.cols;
+//         let y2 = out.data32F[i + 6] * src.rows;
+
+//         let rect = new cv.Rect(x1, y1, x2 - x1, y2 - y1);
+//         let roi = src.roi(rect);
+//         cv.GaussianBlur(roi, roi, new cv.Size(ksize, ksize), 0, 0);
+//         roi.copyTo(src.roi(rect));
+//         roi.delete();
+//       }
+//     }
+
+//     src.copyTo(dst);
+
+//     bgr.delete();
+//     blob.delete();
+//     out.delete();
+
+//   }
+//   catch (err) {
+//     console.error("Face blur error (caught safely):", err.toString());
+//     src.copyTo(dst);
+//   }
+// }
+
+// DNN FACE BLUR 
+let lastDetections = [];
+let detectInterval = 5;
+let frameIndex = 0;
+
+function applyDnnFaceBlur(src, dst) {
+  let bgr, blob, out;
+  try {
+    if (!net) {
+      src.copyTo(dst);
+      return;
+    }
+
+    frameIndex++;
+    const intensity = parseInt(document.getElementById("intensity").value);
+    const ksize = Math.max(5, Math.floor(intensity / 2) * 2 + 1);
+
+    // Convert RGBA → BGR
+    bgr = new cv.Mat();
     cv.cvtColor(src, bgr, cv.COLOR_RGBA2BGR);
 
-    // Prepare blob
-    let blob = cv.blobFromImage(bgr, 1.0, new cv.Size(300, 300),
-      new cv.Scalar(104.0, 177.0, 123.0), false, false);
+    // Run DNN every few frames only
+    if (frameIndex % detectInterval === 0) {
+      blob = cv.blobFromImage(
+        bgr,
+        1.0,
+        new cv.Size(300, 300),
+        new cv.Scalar(104.0, 177.0, 123.0),
+        false,
+        false
+      );
+      net.setInput(blob);
+      out = net.forward();
 
-    net.setInput(blob);
+      lastDetections = [];
+      for (let i = 0; i < out.total(); i += 7) {
+        const confidence = out.data32F[i + 2];
+        if (confidence > 0.6) {
+          let x1 = out.data32F[i + 3] * src.cols;
+          let y1 = out.data32F[i + 4] * src.rows;
+          let x2 = out.data32F[i + 5] * src.cols;
+          let y2 = out.data32F[i + 6] * src.rows;
 
-    let out = net.forward();
+          x1 = Math.max(0, Math.min(x1, src.cols - 1));
+          y1 = Math.max(0, Math.min(y1, src.rows - 1));
+          x2 = Math.max(0, Math.min(x2, src.cols - 1));
+          y2 = Math.max(0, Math.min(y2, src.rows - 1));
 
-    // Process detections
-    
-    for (let i = 0; i < out.total(); i += 7) {
-      let confidence = out.data32F[i + 2];
-      if (confidence > 0.5) {
-        let x1 = out.data32F[i + 3] * src.cols;
-        let y1 = out.data32F[i + 4] * src.rows;
-        let x2 = out.data32F[i + 5] * src.cols;
-        let y2 = out.data32F[i + 6] * src.rows;
-
-        let rect = new cv.Rect(x1, y1, x2 - x1, y2 - y1);
-        let roi = src.roi(rect);
-        cv.GaussianBlur(roi, roi, new cv.Size(ksize, ksize), 0, 0);
-        roi.copyTo(src.roi(rect));
-        roi.delete();
+          const width = x2 - x1;
+          const height = y2 - y1;
+          if (width > 10 && height > 10) {
+            lastDetections.push({ x1, y1, x2, y2 });
+          }
+        }
       }
     }
 
     src.copyTo(dst);
 
-    bgr.delete();
-    blob.delete();
-    out.delete();
+    // Apply blur for cached detections
+    for (const det of lastDetections) {
+      const width = det.x2 - det.x1;
+      const height = det.y2 - det.y1;
+      if (width <= 0 || height <= 0) continue;
 
-  }
-  catch (err) {
-    console.error("Face blur error (caught safely):", err.toString());
+      const rect = new cv.Rect(det.x1, det.y1, width, height);
+      const roi = dst.roi(rect);
+
+      // Create blurred ROI
+      const blurred = new cv.Mat();
+      cv.GaussianBlur(roi, blurred, new cv.Size(ksize, ksize), 0, 0);
+
+      // Make elliptical mask (1-channel)
+      const mask = new cv.Mat.zeros(roi.rows, roi.cols, cv.CV_8UC1);
+      const center = new cv.Point(roi.cols / 2, roi.rows / 2);
+      const axes = new cv.Size(roi.cols / 2.2, roi.rows / 2.2);
+      cv.ellipse(mask, center, axes, 0, 0, 360, new cv.Scalar(255), -1);
+
+      // Convert to RGBA for blending
+      const maskRGBA = new cv.Mat();
+      cv.cvtColor(mask, maskRGBA, cv.COLOR_GRAY2RGBA);
+      const invMask = new cv.Mat();
+      cv.bitwise_not(maskRGBA, invMask);
+
+      const background = new cv.Mat();
+      const foreground = new cv.Mat();
+      cv.bitwise_and(roi, invMask, background);
+      cv.bitwise_and(blurred, maskRGBA, foreground);
+      cv.add(background, foreground, roi);
+
+      // Free memory for each loop
+      roi.delete();
+      blurred.delete();
+      mask.delete();
+      maskRGBA.delete();
+      invMask.delete();
+      background.delete();
+      foreground.delete();
+    }
+  } catch (err) {
+    console.error("Face blur error (optimized):", err);
     src.copyTo(dst);
+  } finally {
+    if (bgr) bgr.delete();
+    if (blob) blob.delete();
+    if (out) out.delete();
   }
 }
+
+
 
 // CARTOON FILTER
 function cartoon(src, dst) {
